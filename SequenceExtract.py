@@ -207,4 +207,3 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
 
 # Print completion message
 print(f"\nProcessing complete.\n{matched_genes} genes matched and written to:\n{output_fasta_file}")
-pyi 
