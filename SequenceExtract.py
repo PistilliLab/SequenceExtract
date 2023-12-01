@@ -6,7 +6,7 @@ import os
 import sys
 
 # This block is a generalized version of the SequenceExtract.py script that can be packaged as a console application
-# It is also the only block that currently contains correct logic for sequence extraction from the reverse strand
+# It also supports downstream offsets from the TTS
 
 def get_YN(prompt):
     while True:
@@ -25,7 +25,7 @@ gtf_file = input("Enter the path to the GTF file: ")
 output_fasta_file = input("Enter the path to the output FASTA file: ")
 to_TTS = get_YN("Extract sequences to each gene's TTS (y/n): ")
 upstream = int(input("Enter the number of upstream bases: "))
-downstream = int(input("Enter the number of downstream bases (if to_TTS = y, this argument is ignored): "))
+downstream = int(input("Enter the number of downstream bases (if to_TTS = y, this argument indicates the number of downstream bases from the TTS): "))
 log_file = input("Enter the path to the log file: ")
 
 # Create the log file if it doesn't exist
@@ -66,7 +66,7 @@ with open(gtf_file, 'r') as gtf_file:
     for line in gtf_file:
         if line.startswith('#'):
             continue
-
+            
         # Split the line by tab to get fields
         fields = line.strip().split('\t')
 
@@ -102,12 +102,11 @@ with open(gtf_file, 'r') as gtf_file:
                         gene_start_lists[chrom].append((start, gene_name))
 
 # Sort each gene end list
-print("Sorting gene end lists...\n")
+print("Sorting gene lists...\n")
 for chrom, end_list in gene_end_lists.items():
     gene_end_lists[chrom] = sorted(end_list, key=lambda x: x[0])
 
 # Sort each gene start list
-print("Sorting gene end lists...\n")
 for chrom, start_list in gene_start_lists.items():
     gene_start_lists[chrom] = sorted(start_list, key=lambda x: x[0])
 
@@ -132,7 +131,7 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
                 extract_start = max(0, start - upstream)
     
                 if to_TTS:
-                    extract_stop = end
+                    extract_stop = end + downstream
                 else:
                     extract_stop = start + downstream
             else:
@@ -140,7 +139,7 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
                 extract_stop = end + upstream
 
                 if to_TTS:
-                    extract_start = start
+                    extract_start = start - downstream
                 else:
                     extract_start = end - downstream
 
