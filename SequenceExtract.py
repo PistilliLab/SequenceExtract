@@ -5,6 +5,9 @@ import warnings
 import os
 import sys
 
+# This block is a generalized version of the SequenceExtract.py script that can be packaged as a console application
+# It is also the only block that currently contains correct logic for sequence extraction from the reverse strand
+
 def get_YN(prompt):
     while True:
         user_input = input(prompt).lower()
@@ -57,6 +60,7 @@ ref_genome = SeqIO.to_dict(SeqIO.parse(ref_genome_file, "fasta"))
 # Read gene coordinates from GTF file
 print("Parsing GTF file...\n")
 gene_coordinates = {}
+gene_start_lists = {}
 gene_end_lists = {}
 with open(gtf_file, 'r') as gtf_file:
     for line in gtf_file:
@@ -83,16 +87,29 @@ with open(gtf_file, 'r') as gtf_file:
                 strand = fields[6]
                 gene_coordinates[gene_id] = (gene_id, gene_name, chrom, start, end, strand)
 
-                # Add to gene end list
-                if chrom not in gene_end_lists:
-                    gene_end_lists[chrom] = [(end, gene_name)]
+                # Add to gene sorted lists for collision checking
+                if strand == '+':
+                    # Add to gene end list
+                    if chrom not in gene_end_lists:
+                        gene_end_lists[chrom] = [(end, gene_name)]
+                    else:
+                        gene_end_lists[chrom].append((end, gene_name))
                 else:
-                    gene_end_lists[chrom].append((end, gene_name))
+                    # Add to gene start list
+                    if chrom not in gene_start_lists:
+                        gene_start_lists[chrom] = [(start, gene_name)]
+                    else:
+                        gene_start_lists[chrom].append((start, gene_name))
 
 # Sort each gene end list
 print("Sorting gene end lists...\n")
 for chrom, end_list in gene_end_lists.items():
     gene_end_lists[chrom] = sorted(end_list, key=lambda x: x[0])
+
+# Sort each gene start list
+print("Sorting gene end lists...\n")
+for chrom, start_list in gene_start_lists.items():
+    gene_start_lists[chrom] = sorted(start_list, key=lambda x: x[0])
 
 # Read Entrez Gene IDs from file
 print("Checking Entrez IDs...\n")
@@ -110,30 +127,54 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
             matched_genes += 1
             gene_id, gene_name, chrom, start, end, strand = gene_coordinates[gene_id]
 
-            # Calculate the upstream & downstream coordinates
-            upstream_start = max(0, start - upstream)
-
-            if to_TTS:
-                downstream_stop = end
+            if strand == '+':
+                # Calculate the upstream & downstream coordinates for '+' strand genes
+                extract_start = max(0, start - upstream)
+    
+                if to_TTS:
+                    extract_stop = end
+                else:
+                    extract_stop = start + downstream
             else:
-                downstream_stop = start + downstream
+                # Calculate the upstream & downstream coordinates for '-' stand genes
+                extract_stop = end + upstream
 
-            # Check to see if upstream start collides with another gene
-            upstream_index = bisect.bisect_left(gene_end_lists[chrom], (upstream_start,))
-            start_index = bisect.bisect_left(gene_end_lists[chrom], (start,))
-            if upstream_index != start_index:
+                if to_TTS:
+                    extract_start = start
+                else:
+                    extract_start = end - downstream
 
-                # Identify the collision gene
-                collision_gene = gene_end_lists[chrom][start_index - 1]
+            if strand == '+':
+                # For '+" strand genes, check to see if extract_start collides with another gene
+                upstream_index = bisect.bisect_left(gene_end_lists[chrom], (extract_start,))
+                start_index = bisect.bisect_left(gene_end_lists[chrom], (start,))
+                if upstream_index != start_index:
+                    # Identify the collision gene
+                    collision_gene = gene_end_lists[chrom][start_index - 1]
+    
+                    # Adjust the extract_start to the end of the collision gene
+                    extract_start = collision_gene[0]
+    
+                    # Print trimming report to the log file
+                    print(f"{gene_name} trimmed due to collision with {collision_gene[1]} at {collision_gene[0]}", file=log_file_handle)
+                    trimmed_genes += 1
+            else:
+                # For '-' strand genes, check to see if extract_end collides with another gene
+                downstream_index = bisect.bisect_left(gene_start_lists[chrom], (extract_stop,))
+                end_index = bisect.bisect_left(gene_start_lists[chrom], (end,))
+                if downstream_index != end_index:
+                    # Identify the collision gene
+                    collision_gene = gene_start_lists[chrom][end_index]
 
-                # Adjust the upstream start to the end of the collision gene
-                upstream_start = collision_gene[0]
+                    # Adjust the extract_stop to the start of the collision gene
+                    extract_stop = collision_gene[0]
 
-                # Print trimming report to the log file
-                print(f"{gene_name} trimmed due to collision with {collision_gene[1]} at {collision_gene[0]}", file=log_file_handle)
-                trimmed_genes += 1
+                    # Print trimming report to the log file
+                    print(f"{gene_name} trimmed due to collision with {collision_gene[1]} at {collision_gene[0]}", file=log_file_handle)
+                    trimmed_genes += 1
 
-            seq = ref_genome[chrom][upstream_start:downstream_stop]
+            # Extract the sequence from the genome
+            seq = ref_genome[chrom][extract_start:extract_stop]
 
             # Adjust sequence for reverse strand
             if strand == '-':
@@ -142,7 +183,10 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
             # Write sequence to fasta file
             seq.id = f"{gene_id}"
             seq.name = f"{gene_name}"
-            seq.description = f"[organism=Homo sapiens][chromosome={chrom}] Gene={gene_name}, TSS={start}, coordinates={upstream_start}-{downstream_stop}, size={downstream_stop - upstream_start}"
+            if strand == '+':
+                seq.description = f"[organism=Homo sapiens][chromosome={chrom}] Gene={gene_name}, TSS={start}, strand='{strand}', coordinates={extract_start}-{extract_stop}, size={extract_stop - extract_start}"
+            else:
+                seq.description = f"[organism=Homo sapiens][chromosome={chrom}] Gene={gene_name}, TSS={end}, strand='{strand}', coordinates={extract_start}-{extract_stop}, size={extract_stop - extract_start}"
             output_fasta_file_handle.write(seq.format("fasta"))
 
             # Write information to log file
@@ -163,3 +207,4 @@ with open(output_fasta_file, 'w') as output_fasta_file_handle, open(log_file, 'a
 
 # Print completion message
 print(f"\nProcessing complete.\n{matched_genes} genes matched and written to:\n{output_fasta_file}")
+pyi 
